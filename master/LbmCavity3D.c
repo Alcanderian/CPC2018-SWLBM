@@ -2,7 +2,10 @@
 #include <stdlib.h>
 #include <math.h>
 #include <mpi.h>
-#include "Argument.h"
+#include <stdio.h>
+#include <float.h>
+#include "../header/Argument.h"
+#include "../header/LbmMaster.h"
 
 int main(int argc, char *argv[])                                       
 {                                                                      
@@ -110,10 +113,13 @@ int main(int argc, char *argv[])
          * ----------------------------*/
 	
 	MLOG("Size                 :  %d x %d x %d\n", X, Y, Z);
+
+    //hch
+    // STEPS = 10;
+    //printf("STEPS = %d\n", STEPS);
+
         MLOG("Steps                :  %d\n", STEPS);
         MLOG("Number of Process    :  %d\n\n", size);
-
-	OLOG(myrank, "Task: X=[\t%d~\t%d], Y=[\t%d~\t%d]\n\n", Xst, Xed, Yst, Yed);
 	
         /*-----------------------------*
          * Space Allocate
@@ -167,105 +173,140 @@ int main(int argc, char *argv[])
 
 	/*----------------------------------------------------*
 	 * Main Calculation section
-	 * ---------------------------------------------------*/
+     * ---------------------------------------------------*/
 	TIME_ST();
 
-	for (s = 0; s < STEPS; s++) {
+    lbm_data_init(X, Y, Z, Xst, Xed, Yst, Yed, x_sec, y_sec, nodes, flags, walls, STEPS,
+                  temp_right,temp_left,temp_down,temp_up,
+                  temp_right_send,temp_left_send,temp_down_send,temp_up_send,
+                  temp_lu,temp_ld,temp_ru,temp_rd,
+                  temp_lu_send,temp_ld_send,temp_ru_send,temp_rd_send);
+    main_iter(&s);
+    
+    TIME_ED();
 
-        bounce_send_init(X,
-			 Y,
-			 Z,
-			 Xst, 
-		         Xed, 
-			 Yst, 
-			 Yed, 
-			 x_sec, 
-			 y_sec, 
-			 current, 
-			 other, 
-			 nodes, 
-                         temp_left_send, 
-			 temp_right_send, 
-			 temp_up_send, 
-			 temp_down_send, 
-                         temp_ld_send, 
-			 temp_lu_send, 
-			 temp_rd_send, 
-			 temp_ru_send);
 
-        bounce_communicate(mycomm, 
-		           dims, 
-			   coords, 
-			   x_sec, 
-			   y_sec, 
-			   Z,
-			   &count,
-			   sta,
-			   req,
-			   temp_left_send, 
-			   temp_right_send, 
-			   temp_up_send, 
-			   temp_down_send, 
-			   temp_left, 
-			   temp_right, 
-			   temp_up, 
-			   temp_down,
-			   temp_lu_send, 
-			   temp_ld_send, 
-			   temp_ru_send, 
-			   temp_rd_send, 
-			   temp_lu, 
-			   temp_ld, 
-			   temp_ru, 
-			   temp_rd);
+    //hch_validation field
 
-	for(i = 0; i < count; i++) {
-		MPI_Wait(&req[i], &sta[i]);
-	}
+    //writing
 
-        bounce_update(X,
-		      Y,
-		      Z,
-		      Xst, 
-		      Xed, 
-		      Yst, 
-		      Yed, 
-		      myrank,
-		      x_sec, 
-		      y_sec,
-		      other,
-		      nodes,
-                      temp_left, 
-		      temp_right, 
-		      temp_up, 
-		      temp_down,
-                      temp_ld, 
-		      temp_lu, 
-		      temp_rd, 
-		      temp_ru);
+    FILE * outfile, *infile;
 
-	stream(nodes, walls, flags, Xst, Xed, Yst, Yed, Z, current, other);
+    char fname[1000];
+	sprintf(fname, "lbm_steps-%d_dump_rank-%02d.dat", STEPS, myrank);
+    //sprintf(fname, "_hch_lbm_val_fine_rank_%02d_STEPS_%d.dat", myrank, STEPS);
 
-	collide(nodes, flags, Xst, Xed, Yst, Yed, Z, current);
+    infile = fopen(fname, "rb");
+    //both "other" and "current" will be checked
+    MPI_Barrier(MPI_COMM_WORLD);
+    fflush(stdout);
+    MPI_Barrier(MPI_COMM_WORLD);
+    if(infile == NULL)
+    {
+        //try to write it
+        outfile = fopen(fname, "wb");
+        if(outfile == NULL)
+        {
+            printf("fuck you! 怎么写不出来？？");
+        }
+        else
+        {
+            //写出整个nodes数组
+            int d0, d1, d2, d3;
+            for(d0 = 0; d0 < 2; d0++)
+            {
+                for(d1 = 1; d1 < x_sec + 1; d1++)
+                {
+                    //for(d2 = 0; d2 < y_sec + 2; d2++)
+                    d2 = 1;
+                    {
+                        for(d3 = 0; d3 < Z; d3++)
+                        {
+                            //fwrite(nodes[d0][d1][d2][d3], sizeof(Real), 19, outfile);
+                            fwrite(nodes[d0][d1][d2][d3], sizeof(Real), 1, outfile);//如果把1改成19，那么会写出2GB的东西
+                        }
+                    }
+                }
+            }
+            fclose(outfile);
+        }
+        
+    }
+    else
+    {
+//        if(myrank == 0)
+//        {
+//            //rank0会产生exception，暂时不知道为什么
+//        }
+//        else
+        {
+            //read and validation
+            //Real* my_check = malloc(sizeof(Real) * 2 * (x_sec + 2) * (y_sec + 2) * Z * 19);
+            Real* my_check = malloc(sizeof(Real) * 2 * (x_sec + 2) * (1) * Z * 1);
 
-	other = current;
-	current = (current+1)%2;
+            fread(my_check, sizeof(Real), 2 * (x_sec + 2) * (1) * Z * 1, infile);
+            //fread(my_check, sizeof(Real), 2 * (x_sec + 2) * (y_sec + 2) * Z * 19, infile);
 
-	if(myrank == 0 && STEPS >= 10 && (s + 1)%(STEPS/10) == 0.0) {
-		n += 1;
-		MLOG("Step >> [%d/%d] Calculation Completed %d%% \n", s + 1, STEPS, n * 10);
-	}
-	
-	}
+            int d0, d1, d2, d3, d4;
+            int iter = 0;
+            for(d0 = 0; d0 < 2; d0++)
+            {
+                for(d1 = 1; d1 < x_sec + 1; d1++)
+                {
+                    //for(d2 = 0; d2 < y_sec + 2; d2++)
+                    d2 = 1;
+                    {
+                        for(d3 = 0; d3 < Z; d3++)
+                        {
+                            d4 = 0;
+                            //for(d4 = 0; d4 < 19; d4++)
+                            {
+                                if(isnan(nodes[d0][d1][d2][d3][d4]) || fabs(my_check[iter] - nodes[d0][d1][d2][d3][d4]) > 1e-7)
+                                {
+                                    printf("myrank = %d, 5d = %d %d %d %d %d, wrong! standard = %.15f, this = %.15f, err = %.15f\n", 
+                                    myrank, d0, d1, d2, d3, d4, my_check[iter], 
+                                    nodes[d0][d1][d2][d3][d4],
+                                    my_check[iter] - nodes[d0][d1][d2][d3][d4]);
+                                    iter = -1;
+                                    break;
+                                }
+                                iter++;
+                            }
+                            if(iter == -1)
+                                break;
+                        }
 
-	TIME_ED();
+                        if(iter == -1)
+                            break;
+                    }
+                    if(iter == -1)
+                        break;
+                }
+                if(iter == -1)
+                    break;
+            }
+            if(iter > 0)
+            {
+                printf("myrank = %d, STEPS = %d, pass!\n", myrank, STEPS);
+            }
+
+            //读入my_check，检查my_check（标准的nodes）和nodes是否相等
+        }
+        fclose(infile);
+    }
+    MPI_Barrier(MPI_COMM_WORLD);
+    fflush(stdout);
+    MPI_Barrier(MPI_COMM_WORLD);
+
+
 	/*-----------------------------*
  	 * OUTPUT 
  	 *-----------------------------*/
 
 	MLOG("Step >> Main Steps Done!\n\n");
 
-	OUTPUT(X, Y, Z, Xst, Xed, Yst, Yed, s, myrank, size, other, x_sec, y_sec, argv[1], local_image, image, rankinfo, nodes);
+    if(STEPS == 100)
+	   OUTPUT(X, Y, Z, Xst, Xed, Yst, Yed, s, myrank, size, other, x_sec, y_sec, argv[1], local_image, image, rankinfo, nodes);
 
 	arrayFree2DF(image);
 	arrayFree2DI(rankinfo);
